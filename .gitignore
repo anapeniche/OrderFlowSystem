@@ -1,0 +1,15 @@
+# .NET (pastas de compilação e binários)
+[Dd]ebug/
+[Rr]elease/
+bin/
+obj/
+.vs/
+.vscode/
+
+# Docker e Ambiente (SEGURANÇA!)
+.env
+.env.local
+
+# Banco de dados local (se houver dumps)
+*.sql
+*.log

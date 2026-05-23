@@ -1,0 +1,16 @@
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  
+  // ADICIONE ESTA SEÇÃO AQUI:
+  "ConnectionStrings": {
+    "DefaultConnection": "Host=postgres_db;Port=5432;Database=orderflow_db;Username=user_orderflow;Password=password_orderflow"
+  },
+  // FIM DA SEÇÃO
+
+  "AllowedHosts": "*"
+}

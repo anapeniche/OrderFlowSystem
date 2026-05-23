@@ -1,0 +1,16 @@
+FROM mcr.microsoft.com/dotnet/sdk:8.0
+
+WORKDIR /src
+
+COPY . .
+
+WORKDIR /src/src/Order.API
+
+
+RUN dotnet tool install --global dotnet-ef --version 8.0.4
+
+ENV PATH="$PATH:/root/.dotnet/tools"
+
+RUN dotnet restore Order.API.csproj
+
+ENTRYPOINT ["sh"]
