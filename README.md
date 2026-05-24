@@ -25,3 +25,8 @@ The system architecture utilizes the **Choreographed Saga Pattern** to manage di
    ```bash
    docker-compose up -d --build
    ```
+
+## Future Ideas & Project Roadmap
+- [ ] Implement JWT Authentication to protect API endpoints.
+- [ ] Configure RabbitMQ Dead Letter Queues (DLQ) for poison messages.
+- [ ] Implement centralized logging with Serilog for microservice monitoring.
