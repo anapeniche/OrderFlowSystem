@@ -1,7 +1,7 @@
 services:
 
   postgres_orderflow:
-    image: postgres:latest
+    image: postgres:16
     container_name: postgres_orderflow
     environment:
       POSTGRES_USER: ${DB_USER}
@@ -10,9 +10,15 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql
+      - postgres_data:/var/lib/postgresql/data
     networks:
       - orderflow-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   rabbitmq_broker:
     image: rabbitmq:3.12-management-alpine
@@ -43,11 +49,11 @@ services:
       - "8081:8080"
     depends_on:
       postgres_orderflow:
-        condition: service_started
+        condition: service_healthy
       rabbitmq_broker:
         condition: service_healthy
     environment:
-      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_ENVIRONMENT=Production
       - ConnectionStrings__DefaultConnection=Host=${DB_HOST};Port=5432;Database=${DB_NAME_ORDER};Username=${DB_USER};Password=${DB_PASSWORD}
       - RabbitMQ__Host=rabbitmq_broker
       - RabbitMQ__Port=5672
@@ -64,15 +70,15 @@ services:
     restart: always
     depends_on:
       postgres_orderflow:
-        condition: service_started
+        condition: service_healthy
       rabbitmq_broker:
         condition: service_healthy
     environment:
-      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_ENVIRONMENT=Production
       - ConnectionStrings__DefaultConnection=Host=${DB_HOST};Port=5432;Database=${DB_NAME_STOCK};Username=${DB_USER};Password=${DB_PASSWORD}
       - RabbitMQ__Host=rabbitmq_broker
       - RabbitMQ__Port=5672
-      - RabbitMQ__UserName=${RABBITMQ_DEFAULT_USER}
+      - RabbitMQ__Username=${RABBITMQ_DEFAULT_USER}
       - RabbitMQ__Password=${RABBITMQ_DEFAULT_PASS}
     networks:
       - orderflow-network
