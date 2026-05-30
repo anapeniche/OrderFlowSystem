@@ -80,7 +80,7 @@ namespace Stock.API
                     {
                         await conn.OpenAsync(stoppingToken);
 
-                        string checkSql = "SELECT \"Quantity\" FROM \"Products\" WHERE \"Id\" = @id";
+                        string checkSql = "SELECT \"Quantity\" FROM \"ProductStocks\" WHERE \"ProductId\" = @id";
                         int currentQuantity = 0;
 
                         using (var checkCmd = new NpgsqlCommand(checkSql, conn))
@@ -92,7 +92,7 @@ namespace Stock.API
 
                         if (currentQuantity >= quantity)
                         {
-                            string updateSql = "UPDATE \"Products\" SET \"Quantity\" = \"Quantity\" - @qty WHERE \"Id\" = @id";
+                            string updateSql = "UPDATE \"ProductStocks\" SET \"Quantity\" = \"Quantity\" - @qty WHERE \"ProductId\" = @id";
                             using (var updateCmd = new NpgsqlCommand(updateSql, conn))
                             {
                                 updateCmd.Parameters.AddWithValue("qty", quantity);
