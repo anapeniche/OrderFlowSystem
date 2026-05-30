@@ -90,6 +90,8 @@ namespace Order.API
                 catch (Exception ex)
                 {
                     _logger.LogError($"[ERRO CRÍTICO SAGA]: {ex.Message}");
+                    _channel.BasicNack(deliveryTag: ea.DeliveryTag, multiple: false, requeue: true);
+                    return;
                 }
 
                 _channel.BasicAck(deliveryTag: ea.DeliveryTag, multiple: false);
