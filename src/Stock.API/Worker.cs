@@ -65,10 +65,10 @@ namespace Stock.API
                 try
                 {
                     using var doc = JsonDocument.Parse(message);
-                    int orderId = doc.RootElement.GetProperty("OrderId").GetInt32();
+                    int orderId = doc.RootElement.GetProperty("Id").GetInt32();
                     var firstItem = doc.RootElement.GetProperty("Items")[0];
-                    int productId = doc.RootElement.GetProperty("ProductId").GetInt32();
-                    int quantity = doc.RootElement.GetProperty("Quantity").GetInt32();
+                    int productId = firstItem.GetProperty("ProductId").GetInt32();
+                    int quantity = firstItem.GetProperty("Quantity").GetInt32();
 
                     var connectionString = _configuration.GetConnectionString("DefaultConnection")
                         ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
