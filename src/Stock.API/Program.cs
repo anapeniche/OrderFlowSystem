@@ -14,9 +14,15 @@ var host = builder.Build();
 using (var scope = host.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<StockDbContext>();
-
-   // db.Database.Migrate(); 
+    try
+    {
+        db.Database.Migrate();
+        Console.WriteLine("[DB] Stock migrations aplicadas com sucesso.");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[ERRO DB STOCK]: {ex.Message}");
+    }
 }
-
 
 host.Run();

@@ -23,7 +23,6 @@ namespace Stock.API
         {
             _logger = logger;
             _configuration = configuration;
-            InitRabbitMQ();
         }
 
         private void InitRabbitMQ()
@@ -53,6 +52,7 @@ namespace Stock.API
 
         protected override Task ExecuteAsync(CancellationToken stoppingToken)
         {
+            InitRabbitMQ();
             stoppingToken.Register(() => _connection?.Close());
 
             var consumer = new EventingBasicConsumer(_channel);
