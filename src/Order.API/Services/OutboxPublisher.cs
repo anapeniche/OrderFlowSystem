@@ -1,39 +1,44 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.EntityFrameworkCore;
 using Order.API.Data;
-using Order.API.Domain;
-using System.Text.Json;
-using System.Threading.Tasks;
-using System.Threading;
 using RabbitMQ.Client;
-using System;
-using System.Linq;
+using System.Text;
+using System.Text.Json;
 
 namespace Order.API.Services
 {
     public class OutboxPublisher : BackgroundService
     {
         private readonly IServiceProvider _serviceProvider;
-        private readonly IConnection _connection;
-        private readonly IModel _channel;
+        private readonly IConfiguration _configuration;
+        private readonly ILogger<OutboxPublisher> _logger;
+        private IConnection _connection;
+        private IModel _channel;
 
-        public OutboxPublisher(IServiceProvider serviceProvider)
+        public OutboxPublisher(
+            IServiceProvider serviceProvider,
+            IConfiguration configuration,
+            ILogger<OutboxPublisher> logger)
         {
             _serviceProvider = serviceProvider;
+            _configuration = configuration;
+            _logger = logger;
+        }
 
-        var configuration = serviceProvider.GetRequiredService<IConfiguration>();
+        private void InitRabbitMQ()
+        {
+            var factory = new ConnectionFactory()
+            {
+                HostName = _configuration["RabbitMQ__Host"] ?? "rabbitmq_broker",
+                Port = int.Parse(_configuration["RabbitMQ__Port"] ?? "5672"),
+                UserName = _configuration["RabbitMQ__Username"] ?? "guest",
+                Password = _configuration["RabbitMQ__Password"] ?? "guest"
+            };
 
-             var factory = new ConnectionFactory()
-{
-    HostName = configuration["RabbitMQ:Host"] ?? "rabbitmq_broker",
-    Port = int.Parse(configuration["RabbitMQ:Port"] ?? "5672"),
-    UserName = configuration["RabbitMQ:UserName"] ?? "guest",
-    Password = configuration["RabbitMQ:Password"] ?? "guest"
-};
-
-            int retryCount = 0;
-            while (retryCount < 10)
+            while (true)
             {
                 try
                 {
@@ -42,29 +47,27 @@ namespace Order.API.Services
 
                     _channel.QueueDeclare(
                         queue: "order-placed",
-                        durable: false,
+                        durable: true,
                         exclusive: false,
                         autoDelete: false,
                         arguments: null
                     );
 
-                    Console.WriteLine("RabbitMQ connection established.");
+                    _logger.LogInformation("[OUTBOX] Conectado ao RabbitMQ com sucesso.");
                     break;
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"Waiting for RabbitMQ... attempt {retryCount + 1}. Error: {ex.Message}");
-                    Task.Delay(5000).Wait();
-                    retryCount++;
+                    _logger.LogWarning($"[OUTBOX] Aguardando RabbitMQ... {ex.Message}");
+                    Thread.Sleep(3000);
                 }
             }
-
-            if (_connection == null || _channel == null)
-                throw new Exception("rabbitmq_broker connection could not be established.");
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
+            InitRabbitMQ();
+
             while (!stoppingToken.IsCancellationRequested)
             {
                 await PublishOutboxMessagesAsync();
@@ -83,19 +86,28 @@ namespace Order.API.Services
 
             foreach (var evt in pendingEvents)
             {
-                var body = System.Text.Encoding.UTF8.GetBytes(evt.Payload);
+                try
+                {
+                    var body = Encoding.UTF8.GetBytes(evt.Payload);
 
-                _channel.BasicPublish(
-                    exchange: "",
-                    routingKey: "order-placed",
-                    basicProperties: null,
-                    body: body
-                );
+                    _channel.BasicPublish(
+                        exchange: "",
+                        routingKey: "order-placed",
+                        basicProperties: null,
+                        body: body
+                    );
 
-                evt.Published = true;
+                    evt.Published = true;
+                    _logger.LogInformation($"[OUTBOX] Evento {evt.Id} publicado com sucesso.");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError($"[OUTBOX] Falha ao publicar evento {evt.Id}: {ex.Message}");
+                }
             }
 
-            await db.SaveChangesAsync();
+            if (pendingEvents.Any(e => e.Published))
+                await db.SaveChangesAsync();
         }
 
         public override void Dispose()
