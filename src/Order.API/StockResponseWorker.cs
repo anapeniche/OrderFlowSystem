@@ -70,12 +70,8 @@ namespace Order.API
                     if (orderId > 0)
                     {
 
-                        var host = _configuration["DB_HOST"] ?? "postgres_orderflow";
-                        var database = "orderflow_db";
-                        var user = _configuration["DB_USER"] ?? "postgres";
-                        var password = _configuration["DB_PASSWORD"]?.Replace("POSTGRES_PASSWORD: ", "") ?? "password_orderflow";
-
-                        string connectionString = $"Host={host};Database={database};Username={user};Password={password};";
+                        var connectionString = _configuration.GetConnectionString("DefaultConnection")
+                            ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
 
                         using (var conn = new NpgsqlConnection(connectionString))
                         {
