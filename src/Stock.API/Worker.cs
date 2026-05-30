@@ -66,6 +66,7 @@ namespace Stock.API
                 {
                     using var doc = JsonDocument.Parse(message);
                     int orderId = doc.RootElement.GetProperty("OrderId").GetInt32();
+                    var firstItem = doc.RootElement.GetProperty("Items")[0];
                     int productId = doc.RootElement.GetProperty("ProductId").GetInt32();
                     int quantity = doc.RootElement.GetProperty("Quantity").GetInt32();
 
