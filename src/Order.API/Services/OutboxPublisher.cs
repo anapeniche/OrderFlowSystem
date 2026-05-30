@@ -46,7 +46,7 @@ namespace Order.API.Services
                     _channel = _connection.CreateModel();
 
                     _channel.QueueDeclare(
-                        queue: "order-placed",
+                        queue: "order_created_queue",
                         durable: true,
                         exclusive: false,
                         autoDelete: false,
@@ -92,7 +92,7 @@ namespace Order.API.Services
 
                     _channel.BasicPublish(
                         exchange: "",
-                        routingKey: "order-placed",
+                        routingKey: "order_created_queue",
                         basicProperties: null,
                         body: body
                     );
