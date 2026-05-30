@@ -34,12 +34,14 @@ namespace Order.API
                 {
                     _connection = factory.CreateConnection();
                     _channel = _connection.CreateModel();
+                    _channel.QueueDeclare(queue: "order_approved_queue", durable: true, exclusive: false, autoDelete: false, arguments: null);
                     _channel.QueueDeclare(queue: "order_rejected_queue", durable: true, exclusive: false, autoDelete: false, arguments: null);
+                    _logger.LogInformation("[SAGA] Conectado ao RabbitMQ com sucesso!");
                     break;
                 }
                 catch
                 {
-                    _logger.LogWarning("Aguardando RabbitMQ...");
+                    _logger.LogWarning("[SAGA] Aguardando RabbitMQ...");
                     Thread.Sleep(2000);
                 }
             }
@@ -50,54 +52,71 @@ namespace Order.API
             InitRabbitMQ();
             stoppingToken.Register(() => _connection?.Close());
 
-            var consumer = new EventingBasicConsumer(_channel);
-            consumer.Received += async (model, ea) =>
+            // Consumer para pedidos APROVADOS
+            var approvedConsumer = new EventingBasicConsumer(_channel);
+            approvedConsumer.Received += async (model, ea) =>
             {
-                var body = ea.Body.ToArray();
-                var message = Encoding.UTF8.GetString(body);
-                
+                var message = Encoding.UTF8.GetString(ea.Body.ToArray());
                 try
                 {
                     using var doc = JsonDocument.Parse(message);
-                    int orderId = 0;
-                    
-                    if (doc.RootElement.TryGetProperty("OrderId", out var orderIdProp) || 
-                        doc.RootElement.TryGetProperty("orderId", out orderIdProp))
-                    {
-                        orderId = orderIdProp.GetInt32();
-                    }
+                    int orderId = doc.RootElement.GetProperty("OrderId").GetInt32();
 
                     if (orderId > 0)
                     {
-
                         var connectionString = _configuration.GetConnectionString("DefaultConnection")
-                            ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
+                            ?? throw new InvalidOperationException("Connection string not found.");
 
-                        using (var conn = new NpgsqlConnection(connectionString))
-                        {
-                            await conn.OpenAsync(stoppingToken);
-                            string sql = "UPDATE \"Orders\" SET \"Status\" = 2 WHERE \"Id\" = @id";
-                            
-                            using (var cmd = new NpgsqlCommand(sql, conn))
-                            {
-                                cmd.Parameters.AddWithValue("id", orderId);
-                                int rowsAffected = await cmd.ExecuteNonQueryAsync(stoppingToken);
-                                _logger.LogInformation($"[SAGA] Pedido {orderId} REJEITADO processado com sucesso de forma segura.");
-                            }
-                        }
+                        using var conn = new NpgsqlConnection(connectionString);
+                        await conn.OpenAsync(stoppingToken);
+                        using var cmd = new NpgsqlCommand("UPDATE \"Orders\" SET \"Status\" = 1 WHERE \"Id\" = @id", conn);
+                        cmd.Parameters.AddWithValue("id", orderId);
+                        await cmd.ExecuteNonQueryAsync(stoppingToken);
+                        _logger.LogInformation($"[SAGA] Pedido {orderId} APROVADO.");
                     }
+                    _channel.BasicAck(deliveryTag: ea.DeliveryTag, multiple: false);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError($"[ERRO CRÍTICO SAGA]: {ex.Message}");
+                    _logger.LogError($"[SAGA] Erro ao aprovar pedido: {ex.Message}");
                     _channel.BasicNack(deliveryTag: ea.DeliveryTag, multiple: false, requeue: true);
-                    return;
                 }
-
-                _channel.BasicAck(deliveryTag: ea.DeliveryTag, multiple: false);
             };
 
-            _channel.BasicConsume(queue: "order_rejected_queue", autoAck: false, consumer: consumer);
+            // Consumer para pedidos REJEITADOS
+            var rejectedConsumer = new EventingBasicConsumer(_channel);
+            rejectedConsumer.Received += async (model, ea) =>
+            {
+                var message = Encoding.UTF8.GetString(ea.Body.ToArray());
+                try
+                {
+                    using var doc = JsonDocument.Parse(message);
+                    int orderId = doc.RootElement.GetProperty("OrderId").GetInt32();
+
+                    if (orderId > 0)
+                    {
+                        var connectionString = _configuration.GetConnectionString("DefaultConnection")
+                            ?? throw new InvalidOperationException("Connection string not found.");
+
+                        using var conn = new NpgsqlConnection(connectionString);
+                        await conn.OpenAsync(stoppingToken);
+                        using var cmd = new NpgsqlCommand("UPDATE \"Orders\" SET \"Status\" = 2 WHERE \"Id\" = @id", conn);
+                        cmd.Parameters.AddWithValue("id", orderId);
+                        await cmd.ExecuteNonQueryAsync(stoppingToken);
+                        _logger.LogInformation($"[SAGA] Pedido {orderId} REJEITADO.");
+                    }
+                    _channel.BasicAck(deliveryTag: ea.DeliveryTag, multiple: false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError($"[SAGA] Erro ao rejeitar pedido: {ex.Message}");
+                    _channel.BasicNack(deliveryTag: ea.DeliveryTag, multiple: false, requeue: true);
+                }
+            };
+
+            _channel.BasicConsume(queue: "order_approved_queue", autoAck: false, consumer: approvedConsumer);
+            _channel.BasicConsume(queue: "order_rejected_queue", autoAck: false, consumer: rejectedConsumer);
+
             return Task.CompletedTask;
         }
     }
