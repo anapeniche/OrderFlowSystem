@@ -28,28 +28,32 @@ public class OrdersController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<ActionResult<Order.API.Domain.Entities.Order>> PostOrder(Order.API.Domain.Entities.Order orderEntity)
+public async Task<ActionResult<Order.API.Domain.Entities.Order>> PostOrder(Order.API.Domain.Entities.Order orderEntity)
+{
+    if (orderEntity == null) return BadRequest();
+    orderEntity.CreatedAt = DateTime.UtcNow;
+
+
+    _context.Orders.Add(orderEntity);
+    await _context.SaveChangesAsync();
+
+
+    var outboxEvent = new OutboxEvent
     {
-        if (orderEntity == null) return BadRequest();
-
-
-        orderEntity.CreatedAt = DateTime.UtcNow;
-
-
-        var outboxEvent = new OutboxEvent
+        Type = "OrderCreated",
+        Payload = JsonSerializer.Serialize(new
         {
-            Type = "OrderCreated",
-            Payload = JsonSerializer.Serialize(orderEntity),
-            CreatedAt = DateTime.UtcNow,
-            Published = false
-        };
+            OrderId = orderEntity.Id,
+            ProductId = orderEntity.Items.First().ProductId,
+            Quantity = orderEntity.Items.First().Quantity
+        }),
+        CreatedAt = DateTime.UtcNow,
+        Published = false
+    };
 
+    _context.OutboxEvents.Add(outboxEvent);
+    await _context.SaveChangesAsync();
 
-        _context.Orders.Add(orderEntity);
-        _context.OutboxEvents.Add(outboxEvent);
-
-        await _context.SaveChangesAsync();
-
-        return CreatedAtAction(nameof(GetOrders), new { id = orderEntity.Id }, orderEntity);
-    }
+    return CreatedAtAction(nameof(GetOrders), new { id = orderEntity.Id }, orderEntity);
 }
+    }
