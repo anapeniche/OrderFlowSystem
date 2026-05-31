@@ -14,10 +14,6 @@ namespace Order.API.Migrations
                 name: "FK_OrderItemEntity_Orders_OrderEntityId",
                 table: "OrderItemEntity");
 
-            migrationBuilder.RenameColumn(
-                name: "EventType",
-                table: "OutboxEvents",
-                newName: "Type");
 
             migrationBuilder.AddColumn<int>(
                 name: "Status",
@@ -56,10 +52,6 @@ namespace Order.API.Migrations
                 name: "Status",
                 table: "Orders");
 
-            migrationBuilder.RenameColumn(
-                name: "Type",
-                table: "OutboxEvents",
-                newName: "EventType");
 
             migrationBuilder.AlterColumn<int>(
                 name: "OrderEntityId",
