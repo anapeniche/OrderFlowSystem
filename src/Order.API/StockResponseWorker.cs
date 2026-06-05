@@ -16,8 +16,8 @@ namespace Order.API
     {
         private readonly ILogger<StockResponseWorker> _logger;
         private readonly IConfiguration _configuration;
-        private IConnection _connection;
-        private IModel _channel;
+        private IConnection? _connection;
+        private IModel? _channel;
 
         public StockResponseWorker(ILogger<StockResponseWorker> logger, IConfiguration configuration)
         {

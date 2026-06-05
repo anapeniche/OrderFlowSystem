@@ -15,8 +15,8 @@ namespace Order.API.Services
         private readonly IServiceProvider _serviceProvider;
         private readonly IConfiguration _configuration;
         private readonly ILogger<OutboxPublisher> _logger;
-        private IConnection _connection;
-        private IModel _channel;
+        private IConnection? _connection;
+        private IModel? _channel;
 
         public OutboxPublisher(
             IServiceProvider serviceProvider,

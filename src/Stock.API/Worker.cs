@@ -16,8 +16,8 @@ namespace Stock.API
     {
         private readonly ILogger<Worker> _logger;
         private readonly IConfiguration _configuration;
-        private IConnection _connection;
-        private IModel _channel;
+        private IConnection? _connection;
+        private IModel? _channel;
 
         public Worker(ILogger<Worker> logger, IConfiguration configuration)
         {
