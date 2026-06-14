@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System;
 using System.Text;
 using System.Text.Json;
@@ -35,9 +36,34 @@ namespace Stock.API
                     _connection = factory.CreateConnection();
                     _channel = _connection.CreateModel();
                     
-                    _channel.QueueDeclare(queue: "order_created_queue", durable: true, exclusive: false, autoDelete: false, arguments: null);
+                    // Dead Letter Exchange
+                    _channel.ExchangeDeclare(
+                        exchange: "dlx",
+                        type: "direct",
+                        durable: true);
+
+                    // Dead Letter Queues
+                    _channel.QueueDeclare(
+                        queue: "order_created_queue.dlq",
+                        durable: true,
+                        exclusive: false,
+                        autoDelete: false,
+                        arguments: null);
+                    _channel.QueueBind("order_created_queue.dlq", "dlx", "order_created_queue");
+
+                    // Filas principais com DLX configurado
+                    var queueArgs = new Dictionary<string, object>
+                    {
+                        { "x-dead-letter-exchange", "dlx" },
+                        { "x-dead-letter-routing-key", "order_created_queue" }
+                    };
+
+                    _channel.QueueDeclare(queue: "order_created_queue", durable: true, exclusive: false, autoDelete: false, arguments: queueArgs);
                     _channel.QueueDeclare(queue: "order_approved_queue", durable: true, exclusive: false, autoDelete: false, arguments: null);
                     _channel.QueueDeclare(queue: "order_rejected_queue", durable: true, exclusive: false, autoDelete: false, arguments: null);
+                    
+                    // Prefetch para processar uma mensagem por vez
+                    _channel.BasicQos(prefetchSize: 0, prefetchCount: 1, global: false);
                     
                     _logger.LogInformation("[ESTOQUE] Conectado ao RabbitMQ com sucesso!");
                     break;
@@ -118,8 +144,27 @@ namespace Stock.API
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError($"[ERRO CRÍTICO ESTOQUE]: {ex.Message}");
-                    _channel.BasicNack(deliveryTag: ea.DeliveryTag, multiple: false, requeue: true);
+                    // Verifica quantas vezes a mensagem já foi reentregue
+                    var retryCount = 0;
+                    if (ea.BasicProperties.Headers != null &&
+                        ea.BasicProperties.Headers.TryGetValue("x-death", out var xDeath) &&
+                        xDeath is List<object> deaths && deaths.Count > 0)
+                    {
+                        var death = deaths[0] as Dictionary<string, object?>;
+                        if (death != null && death.TryGetValue("count", out var count))
+                            retryCount = Convert.ToInt32(count);
+                    }
+
+                    if (retryCount >= 3)
+                    {
+                        _logger.LogError($"[DLQ] Mensagem enviada para DLQ após {retryCount} tentativas: {ex.Message}");
+                        _channel.BasicNack(deliveryTag: ea.DeliveryTag, multiple: false, requeue: false);
+                    }
+                    else
+                    {
+                        _logger.LogWarning($"[RETRY] Tentativa {retryCount + 1}/3: {ex.Message}");
+                        _channel.BasicNack(deliveryTag: ea.DeliveryTag, multiple: false, requeue: true);
+                    }
                     return;
                 }
 

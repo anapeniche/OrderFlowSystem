@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System;
 using System.Text;
 using System.Text.Json;
@@ -78,8 +79,26 @@ namespace Order.API
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError($"[SAGA] Erro ao aprovar pedido: {ex.Message}");
-                    _channel.BasicNack(deliveryTag: ea.DeliveryTag, multiple: false, requeue: true);
+                    var retryCount = 0;
+                    if (ea.BasicProperties.Headers != null &&
+                        ea.BasicProperties.Headers.TryGetValue("x-death", out var xDeath) &&
+                        xDeath is List<object> deaths && deaths.Count > 0)
+                    {
+                        var death = deaths[0] as Dictionary<string, object?>;
+                        if (death != null && death.TryGetValue("count", out var count))
+                            retryCount = Convert.ToInt32(count);
+                    }
+
+                    if (retryCount >= 3)
+                    {
+                        _logger.LogError($"[DLQ] Aprovação enviada para DLQ após {retryCount} tentativas: {ex.Message}");
+                        _channel.BasicNack(deliveryTag: ea.DeliveryTag, multiple: false, requeue: false);
+                    }
+                    else
+                    {
+                        _logger.LogWarning($"[RETRY] Tentativa {retryCount + 1}/3: {ex.Message}");
+                        _channel.BasicNack(deliveryTag: ea.DeliveryTag, multiple: false, requeue: true);
+                    }
                 }
             };
 
@@ -109,8 +128,26 @@ namespace Order.API
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError($"[SAGA] Erro ao rejeitar pedido: {ex.Message}");
-                    _channel.BasicNack(deliveryTag: ea.DeliveryTag, multiple: false, requeue: true);
+                    var retryCount = 0;
+                    if (ea.BasicProperties.Headers != null &&
+                        ea.BasicProperties.Headers.TryGetValue("x-death", out var xDeath) &&
+                        xDeath is List<object> deaths && deaths.Count > 0)
+                    {
+                        var death = deaths[0] as Dictionary<string, object?>;
+                        if (death != null && death.TryGetValue("count", out var count))
+                            retryCount = Convert.ToInt32(count);
+                    }
+
+                    if (retryCount >= 3)
+                    {
+                        _logger.LogError($"[DLQ] Rejeição enviada para DLQ após {retryCount} tentativas: {ex.Message}");
+                        _channel.BasicNack(deliveryTag: ea.DeliveryTag, multiple: false, requeue: false);
+                    }
+                    else
+                    {
+                        _logger.LogWarning($"[RETRY] Tentativa {retryCount + 1}/3: {ex.Message}");
+                        _channel.BasicNack(deliveryTag: ea.DeliveryTag, multiple: false, requeue: true);
+                    }
                 }
             };
 
