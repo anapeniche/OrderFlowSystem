@@ -1,15 +1,18 @@
-using System.Collections.Generic;
 using System;
+using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using Npgsql;
+using Stock.API.Data;
+using Stock.API.Domain;
 
 namespace Stock.API
 {
@@ -17,13 +20,15 @@ namespace Stock.API
     {
         private readonly ILogger<Worker> _logger;
         private readonly IConfiguration _configuration;
+        private readonly IServiceProvider _serviceProvider;
         private IConnection? _connection;
         private IModel? _channel;
 
-        public Worker(ILogger<Worker> logger, IConfiguration configuration)
+        public Worker(ILogger<Worker> logger, IConfiguration configuration, IServiceProvider serviceProvider)
         {
             _logger = logger;
             _configuration = configuration;
+            _serviceProvider = serviceProvider;
         }
 
         private void InitRabbitMQ()
@@ -35,23 +40,12 @@ namespace Stock.API
                 {
                     _connection = factory.CreateConnection();
                     _channel = _connection.CreateModel();
-                    
-                    // Dead Letter Exchange
-                    _channel.ExchangeDeclare(
-                        exchange: "dlx",
-                        type: "direct",
-                        durable: true);
 
-                    // Dead Letter Queues
-                    _channel.QueueDeclare(
-                        queue: "order_created_queue.dlq",
-                        durable: true,
-                        exclusive: false,
-                        autoDelete: false,
-                        arguments: null);
+                    _channel.ExchangeDeclare(exchange: "dlx", type: "direct", durable: true);
+
+                    _channel.QueueDeclare(queue: "order_created_queue.dlq", durable: true, exclusive: false, autoDelete: false, arguments: null);
                     _channel.QueueBind("order_created_queue.dlq", "dlx", "order_created_queue");
 
-                    // Filas principais com DLX configurado
                     var queueArgs = new Dictionary<string, object>
                     {
                         { "x-dead-letter-exchange", "dlx" },
@@ -61,10 +55,8 @@ namespace Stock.API
                     _channel.QueueDeclare(queue: "order_created_queue", durable: true, exclusive: false, autoDelete: false, arguments: queueArgs);
                     _channel.QueueDeclare(queue: "order_approved_queue", durable: true, exclusive: false, autoDelete: false, arguments: null);
                     _channel.QueueDeclare(queue: "order_rejected_queue", durable: true, exclusive: false, autoDelete: false, arguments: null);
-                    
-                    // Prefetch para processar uma mensagem por vez
                     _channel.BasicQos(prefetchSize: 0, prefetchCount: 1, global: false);
-                    
+
                     _logger.LogInformation("[ESTOQUE] Conectado ao RabbitMQ com sucesso!");
                     break;
                 }
@@ -90,61 +82,78 @@ namespace Stock.API
 
                 try
                 {
+                    // Idempotência
+                    var messageId = ea.BasicProperties.MessageId
+                        ?? $"{ea.DeliveryTag}-{ea.RoutingKey}";
+
+                    using var scope = _serviceProvider.CreateScope();
+                    var db = scope.ServiceProvider.GetRequiredService<StockDbContext>();
+
+                    var alreadyProcessed = db.ProcessedMessages
+                        .Any(m => m.MessageId == messageId);
+
+                    if (alreadyProcessed)
+                    {
+                        _logger.LogWarning($"[IDEMPOTÊNCIA] Mensagem {messageId} já processada. Ignorando.");
+                        _channel.BasicAck(deliveryTag: ea.DeliveryTag, multiple: false);
+                        return;
+                    }
+
+                    // Processa a mensagem
                     using var doc = JsonDocument.Parse(message);
                     int orderId = doc.RootElement.GetProperty("OrderId").GetInt32();
-                    
                     int productId = doc.RootElement.GetProperty("ProductId").GetInt32();
                     int quantity = doc.RootElement.GetProperty("Quantity").GetInt32();
+
                     var connectionString = _configuration.GetConnectionString("DefaultConnection")
-                        ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found.");
+                        ?? throw new InvalidOperationException("Connection string not found.");
 
-                    using (var conn = new NpgsqlConnection(connectionString))
+                    using var conn = new NpgsqlConnection(connectionString);
+                    await conn.OpenAsync(stoppingToken);
+
+                    string checkSql = "SELECT \"Quantity\" FROM \"ProductStocks\" WHERE \"ProductId\" = @id";
+                    int currentQuantity = 0;
+
+                    using (var checkCmd = new NpgsqlCommand(checkSql, conn))
                     {
-                        await conn.OpenAsync(stoppingToken);
+                        checkCmd.Parameters.AddWithValue("id", productId);
+                        var result = await checkCmd.ExecuteScalarAsync(stoppingToken);
+                        if (result != null) currentQuantity = Convert.ToInt32(result);
+                    }
 
-                        string checkSql = "SELECT \"Quantity\" FROM \"ProductStocks\" WHERE \"ProductId\" = @id";
-                        int currentQuantity = 0;
-
-                        using (var checkCmd = new NpgsqlCommand(checkSql, conn))
+                    if (currentQuantity >= quantity)
+                    {
+                        string updateSql = "UPDATE \"ProductStocks\" SET \"Quantity\" = \"Quantity\" - @qty WHERE \"ProductId\" = @id";
+                        using (var updateCmd = new NpgsqlCommand(updateSql, conn))
                         {
-                            checkCmd.Parameters.AddWithValue("id", productId);
-                            var result = await checkCmd.ExecuteScalarAsync(stoppingToken);
-                            if (result != null) currentQuantity = Convert.ToInt32(result);
+                            updateCmd.Parameters.AddWithValue("qty", quantity);
+                            updateCmd.Parameters.AddWithValue("id", productId);
+                            await updateCmd.ExecuteNonQueryAsync(stoppingToken);
                         }
 
-                        if (currentQuantity >= quantity)
+                        // Registra como processada
+                        db.ProcessedMessages.Add(new ProcessedMessage
                         {
-                            string updateSql = "UPDATE \"ProductStocks\" SET \"Quantity\" = \"Quantity\" - @qty WHERE \"ProductId\" = @id";
-                            using (var updateCmd = new NpgsqlCommand(updateSql, conn))
-                            {
-                                updateCmd.Parameters.AddWithValue("qty", quantity);
-                                updateCmd.Parameters.AddWithValue("id", productId);
-                                await updateCmd.ExecuteNonQueryAsync(stoppingToken);
-                            }
+                            MessageId = messageId,
+                            ProcessedAt = DateTime.UtcNow
+                        });
+                        await db.SaveChangesAsync();
 
-                            _logger.LogInformation($"[ESTOQUE] Sucesso: Estoque reduzido para o produto {productId}.");
+                        _logger.LogInformation($"[ESTOQUE] Sucesso: Estoque reduzido para o produto {productId}.");
 
-                            var approvedPayload = JsonSerializer.Serialize(new { OrderId = orderId });
-                            var approvedBody = Encoding.UTF8.GetBytes(approvedPayload);
-                            
+                        var approvedPayload = JsonSerializer.Serialize(new { OrderId = orderId });
+                        _channel.BasicPublish(exchange: "", routingKey: "order_approved_queue", basicProperties: null, body: Encoding.UTF8.GetBytes(approvedPayload));
+                    }
+                    else
+                    {
+                        _logger.LogWarning($"[ESTOQUE] Falha: Saldo insuficiente para o produto {productId}.");
 
-                            _channel.BasicPublish(exchange: "", routingKey: "order_approved_queue", basicProperties: null, body: approvedBody);
-                        }
-                        else
-                        {
-                            _logger.LogWarning($"[ESTOQUE] Falha: Saldo insuficiente para o produto {productId}.");
-
-                            var rejectedPayload = JsonSerializer.Serialize(new { OrderId = orderId, Reason = "Estoque insuficiente" });
-                            var rejectedBody = Encoding.UTF8.GetBytes(rejectedPayload);
-                            
-
-                            _channel.BasicPublish(exchange: "", routingKey: "order_rejected_queue", basicProperties: null, body: rejectedBody);
-                        }
+                        var rejectedPayload = JsonSerializer.Serialize(new { OrderId = orderId, Reason = "Estoque insuficiente" });
+                        _channel.BasicPublish(exchange: "", routingKey: "order_rejected_queue", basicProperties: null, body: Encoding.UTF8.GetBytes(rejectedPayload));
                     }
                 }
                 catch (Exception ex)
                 {
-                    // Verifica quantas vezes a mensagem já foi reentregue
                     var retryCount = 0;
                     if (ea.BasicProperties.Headers != null &&
                         ea.BasicProperties.Headers.TryGetValue("x-death", out var xDeath) &&

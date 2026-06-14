@@ -8,6 +8,7 @@ public class StockDbContext : DbContext
     public StockDbContext(DbContextOptions<StockDbContext> options) : base(options) { }
 
     public DbSet<ProductStock> ProductStocks { get; set; }
+    public DbSet<ProcessedMessage> ProcessedMessages { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
